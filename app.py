@@ -309,7 +309,7 @@ with about_tab:
     st.subheader("About ASCR")
 
     st.markdown(
-        
+        """
 ### Agentic Security Code Reviewer
 
 ASCR is an AI-assisted security auditing platform designed
