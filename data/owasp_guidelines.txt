@@ -1,0 +1,323 @@
+ASCR SECURE CODING KNOWLEDGE BASE
+
+==================================================
+SQL INJECTION
+==================================================
+
+SQL Injection occurs when untrusted input is incorporated into SQL queries in an unsafe way.
+
+Security Guidance:
+Never construct SQL queries by concatenating or interpolating untrusted user input.
+
+Use:
+- Parameterized queries
+- Prepared statements
+- Safe ORM query APIs
+- Strict input validation where appropriate
+- Least-privilege database accounts
+
+Unsafe pattern:
+
+query = "SELECT * FROM users WHERE name = '" + username + "'"
+
+Safer pattern:
+
+query = "SELECT * FROM users WHERE name = ?"
+cursor.execute(query, (username,))
+
+The application should not allow user-controlled data to alter the SQL query structure.
+
+
+==================================================
+HARDCODED SECRETS
+==================================================
+
+Secrets should not be stored directly inside source code.
+
+Examples of sensitive secrets include:
+
+- API keys
+- Database passwords
+- Authentication tokens
+- Private keys
+- Cloud credentials
+- Encryption keys
+
+Unsafe:
+
+API_KEY = "my-secret-api-key"
+
+Recommended:
+
+import os
+API_KEY = os.getenv("API_KEY")
+
+For production systems, use a dedicated secrets manager where appropriate.
+
+If a secret has already been exposed, it should be rotated or revoked.
+
+
+==================================================
+CROSS-SITE SCRIPTING (XSS)
+==================================================
+
+Cross-Site Scripting can occur when untrusted data is inserted into HTML or browser-executable contexts without appropriate protection.
+
+Security Guidance:
+
+- Use framework-provided output encoding.
+- Encode output according to its context.
+- Avoid unsafe HTML rendering APIs.
+- Sanitize HTML when HTML input is genuinely required.
+- Treat user-controlled content as untrusted.
+
+
+==================================================
+COMMAND INJECTION
+==================================================
+
+Command Injection occurs when attacker-controlled input reaches an operating-system command interpreter.
+
+Security Guidance:
+
+- Prefer safe library APIs instead of shell commands.
+- Avoid passing untrusted strings to shell execution functions.
+- Use fixed commands where possible.
+- Use strict allowlists for required values.
+- Pass arguments separately rather than constructing shell command strings.
+
+
+==================================================
+PATH TRAVERSAL
+==================================================
+
+Path Traversal occurs when untrusted input is used to access files outside the intended directory.
+
+Security Guidance:
+
+- Do not directly concatenate user input into filesystem paths.
+- Canonicalize paths.
+- Validate the resulting path.
+- Restrict file access to an intended base directory.
+- Reject traversal sequences when appropriate.
+- Use secure filesystem APIs.
+
+
+==================================================
+WEAK CRYPTOGRAPHY
+==================================================
+
+Modern applications should use established cryptographic algorithms and secure library implementations.
+
+Avoid using:
+
+- MD5 for password storage
+- SHA-1 for password storage
+- Custom cryptographic algorithms
+- Predictable random values for security-sensitive operations
+
+For password storage, use password-specific hashing algorithms such as:
+
+- Argon2id
+- scrypt
+- bcrypt
+
+Use established cryptographic libraries rather than implementing cryptography manually.
+
+
+==================================================
+AUTHENTICATION
+==================================================
+
+Authentication verifies the identity of a user or system.
+
+Security Guidance:
+
+- Use secure password hashing.
+- Never store plaintext passwords.
+- Protect authentication sessions.
+- Use appropriate session expiration.
+- Consider multi-factor authentication.
+- Implement account protection against abuse.
+- Do not expose authentication secrets.
+
+
+==================================================
+AUTHORIZATION
+==================================================
+
+Authorization determines whether an authenticated user can access a resource or perform an operation.
+
+Security Guidance:
+
+- Perform authorization checks on the server.
+- Do not rely only on client-side controls.
+- Verify access for every protected resource.
+- Do not trust user-controlled object identifiers.
+- Apply least privilege.
+
+
+==================================================
+INSECURE DIRECT OBJECT REFERENCE
+==================================================
+
+An IDOR-style vulnerability can occur when an application uses user-controlled identifiers to access resources without verifying authorization.
+
+Example:
+
+/api/user/123/profile
+
+The server must verify that the requesting user is actually authorized to access resource 123.
+
+Security Guidance:
+
+- Perform server-side authorization.
+- Do not rely on hidden fields or UI restrictions.
+- Validate ownership or permissions for each requested resource.
+
+
+==================================================
+INSECURE DESERIALIZATION
+==================================================
+
+Deserializing untrusted data can be dangerous when the serialization mechanism allows arbitrary object creation or code execution.
+
+Security Guidance:
+
+- Avoid unsafe deserialization of untrusted input.
+- Prefer safe data formats such as JSON where appropriate.
+- Validate input against explicit schemas.
+- Avoid mechanisms capable of arbitrary class instantiation.
+
+
+==================================================
+SENSITIVE DATA EXPOSURE IN LOGS
+==================================================
+
+Applications should not write sensitive information into logs.
+
+Do not log:
+
+- Passwords
+- API keys
+- Access tokens
+- Session identifiers
+- Private keys
+- Authentication credentials
+
+Use structured logging and protect log storage.
+
+
+==================================================
+SERVER-SIDE REQUEST FORGERY (SSRF)
+==================================================
+
+SSRF can occur when an application retrieves a user-controlled URL without adequate destination validation.
+
+Security Guidance:
+
+- Validate outbound destinations.
+- Prefer allowlists for permitted hosts.
+- Restrict access to internal network ranges.
+- Protect cloud metadata endpoints.
+- Avoid arbitrary outbound requests from untrusted input.
+
+
+==================================================
+INPUT VALIDATION
+==================================================
+
+Input validation should be performed where user-controlled data enters security-sensitive operations.
+
+Security Guidance:
+
+- Treat external input as untrusted.
+- Validate expected type.
+- Validate length.
+- Validate allowed values.
+- Validate format.
+- Prefer allowlists over blocklists where practical.
+
+
+==================================================
+OUTPUT ENCODING
+==================================================
+
+Data should be encoded for the context where it is rendered.
+
+Examples include:
+
+- HTML encoding
+- URL encoding
+- JavaScript-safe encoding
+- SQL parameterization
+
+The correct protection depends on the output context.
+
+
+==================================================
+LEAST PRIVILEGE
+==================================================
+
+Applications and accounts should receive only the permissions required to perform their tasks.
+
+Security Guidance:
+
+- Minimize database permissions.
+- Minimize filesystem permissions.
+- Minimize cloud permissions.
+- Separate administrative functions.
+- Avoid unnecessary root or administrator privileges.
+
+
+==================================================
+SECURE ERROR HANDLING
+==================================================
+
+Error messages should not expose sensitive internal information to untrusted users.
+
+Avoid exposing:
+
+- Stack traces
+- Passwords
+- Tokens
+- Internal filesystem paths
+- Database credentials
+- Internal infrastructure information
+
+Detailed diagnostic information should be available through protected logs instead.
+
+
+==================================================
+DEPENDENCY SECURITY
+==================================================
+
+Applications should maintain secure dependencies.
+
+Security Guidance:
+
+- Keep dependencies updated.
+- Remove unnecessary dependencies.
+- Monitor known vulnerabilities.
+- Pin versions when appropriate.
+- Review third-party packages before use.
+
+
+==================================================
+GENERAL SECURE CODING PRINCIPLES
+==================================================
+
+Apply:
+
+- Defense in depth
+- Secure defaults
+- Least privilege
+- Input validation
+- Output encoding
+- Strong authentication
+- Server-side authorization
+- Secure secret management
+- Dependency management
+- Secure error handling
+
+AI-generated security findings should always be validated against the actual source code before being treated as confirmed vulnerabilities.
