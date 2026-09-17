@@ -7,78 +7,46 @@ from utils.workflow_chains import (
     SecurityReviewWorkflow,
     extract_json_findings,
 )
-from utils.report_generator import (
-    build_markdown_report,
-)
+from utils.report_generator import build_markdown_report
 
 
-# =============================================================
+# ============================================================
 # PAGE CONFIGURATION
-# =============================================================
+# ============================================================
 
 st.set_page_config(
-    page_title="ASCR - Security Code Reviewer",
+    page_title="ASCR - Agentic Security Code Reviewer",
     page_icon="🛡️",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
 
-# =============================================================
+# ============================================================
 # CUSTOM CSS
-# =============================================================
+# ============================================================
 
-st.markdown(
-    """
-<style>
-
-.main-title {
-    font-size: 42px;
-    font-weight: 800;
-    margin-bottom: 0;
-}
-
-.subtitle {
-    font-size: 18px;
-    opacity: 0.75;
-    margin-bottom: 25px;
-}
-
-.metric-card {
-    padding: 20px;
-    border-radius: 12px;
-    background: rgba(255,255,255,0.05);
-    border: 1px solid rgba(255,255,255,0.1);
-}
-
-</style>
-""",
-    unsafe_allow_html=True,
+CUSTOM_CSS = (
+    "<style>"
+    ".main-title {"
+    "font-size: 42px;"
+    "font-weight: 800;"
+    "margin-bottom: 0;"
+    "}"
+    ".subtitle {"
+    "font-size: 18px;"
+    "opacity: 0.75;"
+    "margin-bottom: 25px;"
+    "}"
+    "</style>"
 )
 
-
-# =============================================================
-# HEADER
-# =============================================================
-
-st.markdown(
-    '<div class="main-title">🛡️ Agentic Security Code Reviewer</div>',
-    unsafe_allow_html=True,
-)
-
-st.markdown(
-    """
-<div class="subtitle">
-Analyze → Retrieve → Validate → Patch → Report
-</div>
-""",
-    unsafe_allow_html=True,
-)
+st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
 
-# =============================================================
+# ============================================================
 # SESSION STATE
-# =============================================================
+# ============================================================
 
 if "last_findings" not in st.session_state:
     st.session_state.last_findings = None
@@ -86,45 +54,51 @@ if "last_findings" not in st.session_state:
 if "last_report" not in st.session_state:
     st.session_state.last_report = None
 
+if "demo_code" not in st.session_state:
+    st.session_state.demo_code = ""
 
-# =============================================================
+if "demo_filename" not in st.session_state:
+    st.session_state.demo_filename = "demo.py"
+
+
+# ============================================================
+# HEADER
+# ============================================================
+
+st.markdown(
+    '<div class="main-title">🛡️ Agentic Security Code Reviewer</div>',
+    unsafe_allow_html=True,
+)
+
+st.markdown(
+    '<div class="subtitle">Analyze → Retrieve → Validate → Patch → Report</div>',
+    unsafe_allow_html=True,
+)
+
+
+# ============================================================
 # SIDEBAR
-# =============================================================
+# ============================================================
 
 with st.sidebar:
 
     st.header("⚙️ Configuration")
 
-    # ---------------------------------------------------------
-    # API KEY
-    # ---------------------------------------------------------
-
-    default_api_key = os.getenv(
-        "GROQ_API_KEY",
-        "",
-    )
+    environment_key = os.getenv("GROQ_API_KEY", "")
 
     try:
-
-        if not default_api_key:
-            default_api_key = st.secrets.get(
-                "GROQ_API_KEY",
-                "",
-            )
-
+        secrets_key = st.secrets.get("GROQ_API_KEY", "")
     except Exception:
-        pass
+        secrets_key = ""
+
+    default_api_key = environment_key or secrets_key
 
     api_key = st.text_input(
         "Groq API Key",
         value=default_api_key,
         type="password",
-        help="Your Groq API key is never stored by this application.",
+        help="Enter your Groq API key. Never commit it to GitHub.",
     )
-
-    # ---------------------------------------------------------
-    # MODEL
-    # ---------------------------------------------------------
 
     model = st.selectbox(
         "Groq Model",
@@ -139,36 +113,24 @@ with st.sidebar:
 
     st.subheader("🔎 ASCR Pipeline")
 
-    st.write(
-        "1. Vulnerability Detection"
-    )
-
-    st.write(
-        "2. RAG Retrieval"
-    )
-
-    st.write(
-        "3. Agentic Validation"
-    )
-
-    st.write(
-        "4. Secure Patch Generation"
-    )
-
-    st.write(
-        "5. Markdown Report"
-    )
+    st.write("1️⃣ Vulnerability Detection")
+    st.write("2️⃣ RAG Security Retrieval")
+    st.write("3️⃣ Agentic Validation")
+    st.write("4️⃣ Secure Patch Generation")
+    st.write("5️⃣ Markdown Report")
 
     st.divider()
 
+    st.success("RAG Knowledge Base: Ready")
+
     st.caption(
-        "Groq + Sentence Transformers + FAISS + Streamlit"
+        "Groq + Streamlit + Sentence Transformers + FAISS"
     )
 
 
-# =============================================================
-# MAIN TABS
-# =============================================================
+# ============================================================
+# TABS
+# ============================================================
 
 review_tab, demo_tab, about_tab = st.tabs(
     [
@@ -179,15 +141,13 @@ review_tab, demo_tab, about_tab = st.tabs(
 )
 
 
-# =============================================================
+# ============================================================
 # SECURITY REVIEW TAB
-# =============================================================
+# ============================================================
 
 with review_tab:
 
-    st.subheader(
-        "Source Code Input"
-    )
+    st.subheader("💻 Source Code Input")
 
     uploaded_file = st.file_uploader(
         "Upload a source code file",
@@ -210,18 +170,15 @@ with review_tab:
     )
 
     pasted_code = st.text_area(
-        "Or paste source code",
+        "Or paste your source code",
         height=350,
-        placeholder=(
-            "Paste your source code here..."
-        ),
+        placeholder="Paste source code here...",
     )
 
     filename = "pasted_code.txt"
-
     code = pasted_code
 
-    if uploaded_file:
+    if uploaded_file is not None:
 
         filename = uploaded_file.name
 
@@ -235,7 +192,18 @@ with review_tab:
         except Exception as exc:
 
             st.error(
-                f"Could not read file: {exc}"
+                f"Could not read uploaded file: {exc}"
+            )
+
+    if st.session_state.demo_code:
+
+        if not uploaded_file and not pasted_code:
+
+            code = st.session_state.demo_code
+            filename = st.session_state.demo_filename
+
+            st.info(
+                f"Demo code loaded: `{filename}`"
             )
 
     st.caption(
@@ -249,35 +217,28 @@ with review_tab:
     )
 
 
-# =============================================================
+# ============================================================
 # DEMO TAB
-# =============================================================
+# ============================================================
 
 with demo_tab:
 
-    st.subheader(
-        "🧪 Vulnerable Demo"
-    )
+    st.subheader("🧪 Vulnerable Demo Code")
 
     st.write(
-        """
-This example intentionally contains security issues so
-you can test the ASCR pipeline.
-"""
+        "Use this intentionally vulnerable code to test ASCR."
     )
 
-    demo_code = """import sqlite3
-
-API_KEY = "sk-demo-secret"
-
-def search_user(name):
-
-    conn = sqlite3.connect("app.db")
-
-    query = "SELECT * FROM users WHERE name = '" + name + "'"
-
-    return conn.execute(query).fetchall()
-"""
+    demo_code = (
+        'import sqlite3\n'
+        '\n'
+        'API_KEY = "sk-demo-secret"\n'
+        '\n'
+        'def search_user(name):\n'
+        '    conn = sqlite3.connect("app.db")\n'
+        '    query = "SELECT * FROM users WHERE name = \'" + name + "\'"\n'
+        '    return conn.execute(query).fetchall()\n'
+    )
 
     st.code(
         demo_code,
@@ -285,138 +246,131 @@ def search_user(name):
     )
 
     if st.button(
-        "Load Demo Code",
+        "📥 Load Demo Code",
         use_container_width=True,
     ):
 
         st.session_state.demo_code = demo_code
-
-        st.session_state.demo_filename = (
-            "demo.py"
-        )
+        st.session_state.demo_filename = "demo.py"
 
         st.success(
-            "Demo loaded. Go to Security Review and run the review."
+            "Demo code loaded. Open the Security Review tab and run the review."
         )
 
 
-# =============================================================
+# ============================================================
 # ABOUT TAB
-# =============================================================
+# ============================================================
 
 with about_tab:
 
-    st.subheader("About ASCR")
+    st.subheader("ℹ️ About ASCR")
 
-    st.markdown(
-        """
-### Agentic Security Code Reviewer
+    st.write(
+        "Agentic Security Code Reviewer is an AI-assisted "
+        "source-code security analysis platform."
+    )
 
-ASCR is an AI-assisted security auditing platform designed
-to demonstrate modern AI application security workflows.
+    st.markdown("### 🎯 Project Goals")
 
-### Technologies
+    st.write(
+        "ASCR demonstrates Prompt Chaining, Retrieval-Augmented "
+        "Generation, Agentic Validation, and AI-assisted remediation."
+    )
 
-- Groq API
-- Streamlit
-- Sentence Transformers
-- FAISS
-- Retrieval-Augmented Generation
-- Agentic Validation
-- Automated Secure Patch Generation
+    st.markdown("### 🧠 Technologies")
 
-### Architecture
+    st.write(
+        "• Groq API\n"
+        "• Streamlit\n"
+        "• Sentence Transformers\n"
+        "• FAISS\n"
+        "• Python\n"
+        "• RAG\n"
+        "• Agentic AI"
+    )
 
-```text
-Source Code
-     |
-     v
-+-------------------------+
-| Vulnerability Detection |
-|        Groq LLM         |
-+------------+------------+
-             |
-             v
-+-------------------------+
-| RAG Security Guidance   |
-| Sentence Transformers   |
-| + FAISS                 |
-+------------+------------+
-             |
-             v
-+-------------------------+
-| Agentic Validation      |
-| Confirm / FP / Uncertain|
-+------------+------------+
-             |
-             v
-+-------------------------+
-| Secure Patch Generation |
-|        Groq LLM         |
-+------------+------------+
-             |
-             v
-+-------------------------+
-| Security Report         |
-|       Markdown          |
-+-------------------------+
+    st.markdown("### 🔄 Workflow")
 
+    architecture_text = (
+        "Source Code\n"
+        "    ↓\n"
+        "Groq Vulnerability Detection\n"
+        "    ↓\n"
+        "FAISS + Sentence Transformer RAG\n"
+        "    ↓\n"
+        "Agentic Validation\n"
+        "    ↓\n"
+        "Secure Patch Generation\n"
+        "    ↓\n"
+        "Security Report"
+    )
 
+    st.code(
+        architecture_text,
+        language="text",
+    )
 
-
-
-
-
-# =============================================================
-# DEMO STATE
-# =============================================================
-
-if (
-    "demo_code" in st.session_state
-    and not run_review
-):
-
-    code = st.session_state.demo_code
-
-    filename = st.session_state.get(
-        "demo_filename",
-        "demo.py",
+    st.warning(
+        "AI-generated security findings and patches must be "
+        "manually reviewed and tested before production use."
     )
 
 
-# =============================================================
-# RUN WORKFLOW
-# =============================================================
+# ============================================================
+# RUN REVIEW
+# ============================================================
 
 if run_review:
+
+    # --------------------------------------------------------
+    # API KEY VALIDATION
+    # --------------------------------------------------------
 
     if not api_key:
 
         st.error(
-            "Please provide a Groq API key."
+            "❌ Groq API key is missing."
+        )
+
+        st.info(
+            "Add GROQ_API_KEY in Streamlit Secrets or enter "
+            "your key in the sidebar."
         )
 
         st.stop()
 
-    if not code.strip():
+    # --------------------------------------------------------
+    # CODE VALIDATION
+    # --------------------------------------------------------
+
+    if not code or not code.strip():
 
         st.error(
-            "Please upload or paste source code."
+            "❌ Please upload a source-code file or paste code."
         )
 
         st.stop()
+
+    # --------------------------------------------------------
+    # PROGRESS
+    # --------------------------------------------------------
 
     progress = st.progress(
         0,
         text="Initializing ASCR...",
     )
 
-    status = st.empty()
+    status_box = st.empty()
 
     try:
 
-        status.info(
-            "Loading security knowledge base..."
+        # ====================================================
+        # INITIALIZE RAG
+        # ====================================================
+
+        status_box.info(
+            "📚 Loading security knowledge base..."
         )
 
         rag = RAGPipeline()
@@ -427,9 +381,17 @@ if run_review:
             rag_pipeline=rag,
         )
 
+        # ====================================================
+        # STAGE 1
+        # ====================================================
+
         progress.progress(
             10,
-            text="Stage 1/5 — Detecting vulnerabilities...",
+            text="Stage 1/5 — Vulnerability Detection",
+        )
+
+        status_box.info(
+            "🔍 Groq is analyzing the source code..."
         )
 
         raw_detection = workflow.detect(
@@ -441,18 +403,34 @@ if run_review:
             raw_detection
         )
 
+        # ====================================================
+        # STAGE 2
+        # ====================================================
+
         progress.progress(
             30,
-            text="Stage 2/5 — Retrieving security guidance...",
+            text="Stage 2/5 — RAG Security Retrieval",
+        )
+
+        status_box.info(
+            "📚 Retrieving relevant secure-coding guidance..."
         )
 
         findings = workflow.retrieve_context(
             findings
         )
 
+        # ====================================================
+        # STAGE 3
+        # ====================================================
+
         progress.progress(
             50,
-            text="Stage 3/5 — Validating findings...",
+            text="Stage 3/5 — Agentic Validation",
+        )
+
+        status_box.info(
+            "🤖 Validation agent is checking findings..."
         )
 
         findings = workflow.validate(
@@ -460,9 +438,17 @@ if run_review:
             findings=findings,
         )
 
+        # ====================================================
+        # STAGE 4
+        # ====================================================
+
         progress.progress(
             70,
-            text="Stage 4/5 — Generating secure patches...",
+            text="Stage 4/5 — Secure Patch Generation",
+        )
+
+        status_box.info(
+            "🔧 Generating remediation patches..."
         )
 
         findings = workflow.generate_patches(
@@ -470,9 +456,17 @@ if run_review:
             findings=findings,
         )
 
+        # ====================================================
+        # STAGE 5
+        # ====================================================
+
         progress.progress(
             90,
-            text="Stage 5/5 — Generating security report...",
+            text="Stage 5/5 — Report Generation",
+        )
+
+        status_box.info(
+            "📄 Creating security assessment report..."
         )
 
         report = build_markdown_report(
@@ -480,25 +474,32 @@ if run_review:
             findings=findings,
         )
 
+        # ====================================================
+        # COMPLETE
+        # ====================================================
+
         progress.progress(
             100,
-            text="Security review complete.",
+            text="ASCR review completed!",
         )
 
-        status.success(
-            "ASCR review completed successfully."
+        status_box.success(
+            "✅ Security review completed successfully."
         )
 
         st.session_state.last_findings = findings
-
         st.session_state.last_report = report
 
     except Exception as exc:
 
         progress.empty()
 
+        status_box.error(
+            "❌ The security review failed."
+        )
+
         st.error(
-            "The security review failed."
+            f"Error: {exc}"
         )
 
         st.exception(exc)
@@ -506,19 +507,18 @@ if run_review:
         st.stop()
 
 
-# =============================================================
+# ============================================================
 # RESULTS
-# =============================================================
+# ============================================================
 
 findings = st.session_state.last_findings
+
 
 if findings is not None:
 
     st.divider()
 
-    st.subheader(
-        "📊 Security Assessment"
-    )
+    st.header("📊 Security Assessment")
 
     confirmed = [
         finding
@@ -538,43 +538,59 @@ if findings is not None:
         if finding.get("status") == "uncertain"
     ]
 
+    # --------------------------------------------------------
+    # METRICS
+    # --------------------------------------------------------
+
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
+
         st.metric(
             "Total Candidates",
             len(findings),
         )
 
     with col2:
+
         st.metric(
             "Confirmed",
             len(confirmed),
         )
 
     with col3:
+
         st.metric(
             "False Positives",
             len(false_positives),
         )
 
     with col4:
+
         st.metric(
             "Uncertain",
             len(uncertain),
         )
 
+    # --------------------------------------------------------
+    # CLEAN CODE
+    # --------------------------------------------------------
+
     if not findings:
 
         st.success(
-            "No credible security vulnerabilities were detected."
+            "✅ No credible security vulnerabilities were detected."
         )
 
     elif not confirmed:
 
         st.info(
-            "No vulnerabilities were confirmed by the validation agent."
+            "ℹ️ No vulnerabilities were confirmed by the validation agent."
         )
+
+    # --------------------------------------------------------
+    # FINDINGS
+    # --------------------------------------------------------
 
     for number, finding in enumerate(
         findings,
@@ -593,7 +609,7 @@ if findings is not None:
             "Security Finding",
         )
 
-        status = finding.get(
+        validation_status = finding.get(
             "status",
             "unknown",
         )
@@ -601,13 +617,17 @@ if findings is not None:
         title = (
             f"{severity} | "
             f"{vulnerability} | "
-            f"{status.upper()}"
+            f"{validation_status.upper()}"
         )
 
         with st.expander(
             title,
             expanded=(number == 1),
         ):
+
+            # ------------------------------------------------
+            # DETAILS
+            # ------------------------------------------------
 
             st.markdown(
                 "### 🔍 Finding Details"
@@ -624,10 +644,14 @@ if findings is not None:
                 )
             )
 
-            col_a, col_b, col_c = st.columns(3)
+            detail_col1, detail_col2, detail_col3 = (
+                st.columns(3)
+            )
 
-            with col_a:
+            with detail_col1:
+
                 st.write("**Severity**")
+
                 st.write(
                     finding.get(
                         "severity",
@@ -635,8 +659,10 @@ if findings is not None:
                     )
                 )
 
-            with col_b:
+            with detail_col2:
+
                 st.write("**Confidence**")
+
                 st.write(
                     finding.get(
                         "confidence",
@@ -644,43 +670,55 @@ if findings is not None:
                     )
                 )
 
-            with col_c:
+            with detail_col3:
+
                 st.write("**Lines**")
+
                 st.write(
                     f"{finding.get('line_start', '?')}"
-                    f"–"
+                    f" – "
                     f"{finding.get('line_end', '?')}"
                 )
+
+            # ------------------------------------------------
+            # VALIDATION
+            # ------------------------------------------------
 
             st.markdown(
                 "### 🤖 Agentic Validation"
             )
 
             st.write(
-                "**Status:**",
-                status,
+                "**Validation Status:**",
+                validation_status,
             )
 
             st.write(
-                "**Reason:**",
+                "**Validation Reason:**",
                 finding.get(
                     "validation_reason",
-                    "Not available.",
+                    "No validation explanation available.",
                 ),
             )
 
-            if status == "confirmed":
+            # ------------------------------------------------
+            # PATCH
+            # ------------------------------------------------
+
+            if validation_status == "confirmed":
 
                 st.markdown(
-                    "### 🔧 Original vs Patched Code"
+                    "### 🔧 Original vs Suggested Patch"
                 )
 
-                original_col, patched_col = st.columns(2)
+                original_col, patched_col = (
+                    st.columns(2)
+                )
 
                 with original_col:
 
                     st.markdown(
-                        "**🔴 Original**"
+                        "#### 🔴 Original Code"
                     )
 
                     st.code(
@@ -697,7 +735,7 @@ if findings is not None:
                 with patched_col:
 
                     st.markdown(
-                        "**🟢 Suggested Patch**"
+                        "#### 🟢 Suggested Patch"
                     )
 
                     st.code(
@@ -712,15 +750,19 @@ if findings is not None:
                     )
 
                 st.markdown(
-                    "### 💡 Why the Patch Works"
+                    "### 💡 Patch Explanation"
                 )
 
                 st.write(
                     finding.get(
                         "patch_explanation",
-                        "No explanation available.",
+                        "No patch explanation available.",
                     )
                 )
+
+            # ------------------------------------------------
+            # RAG CONTEXT
+            # ------------------------------------------------
 
             st.markdown(
                 "### 📚 Retrieved Security Guidance"
@@ -733,58 +775,78 @@ if findings is not None:
 
             if contexts:
 
-                for index, context in enumerate(
+                for context_number, context in enumerate(
                     contexts,
                     start=1,
                 ):
 
                     st.info(
-                        f"**Context {index}**\n\n"
+                        f"Context {context_number}\n\n"
                         f"{context}"
                     )
 
             else:
 
                 st.write(
-                    "No RAG context retrieved."
+                    "No RAG context was retrieved."
                 )
 
-            if finding.get(
-                "owasp_reference"
-            ):
+            # ------------------------------------------------
+            # SECURITY REFERENCE
+            # ------------------------------------------------
+
+            reference = finding.get(
+                "owasp_reference",
+                "",
+            )
+
+            if reference:
 
                 st.markdown(
                     "### 📖 Security Reference"
                 )
 
                 st.write(
-                    finding[
-                        "owasp_reference"
-                    ]
+                    reference
                 )
+
+
+# ============================================================
+# SECURITY REPORT
+# ============================================================
+
+if st.session_state.last_report is not None:
 
     st.divider()
 
-    st.subheader(
-        "📄 Security Report"
-    )
+    st.header("📄 Security Report")
 
     report = st.session_state.last_report
 
-    if report:
+    st.download_button(
+        label="⬇️ Download Markdown Security Report",
+        data=report,
+        file_name="ascr_security_report.md",
+        mime="text/markdown",
+        use_container_width=True,
+    )
 
-        st.download_button(
-            label="⬇️ Download Markdown Security Report",
-            data=report,
-            file_name="ascr_security_report.md",
-            mime="text/markdown",
-            use_container_width=True,
+    with st.expander(
+        "👁️ Preview Generated Report"
+    ):
+
+        st.markdown(
+            report
         )
 
-        with st.expander(
-            "Preview Report"
-        ):
 
-            st.markdown(
-                report
-            )
+# ============================================================
+# FOOTER
+# ============================================================
+
+st.divider()
+
+st.caption(
+    "ASCR — Agentic Security Code Reviewer | "
+    "AI-assisted defensive security analysis"
+)
