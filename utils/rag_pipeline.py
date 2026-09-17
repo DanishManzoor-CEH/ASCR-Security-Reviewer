@@ -1,369 +1,243 @@
 """
-rag_pipeline.py
----------------
-Knowledge-base layer for the Agentic Security Code Reviewer (ASCR).
+RAG pipeline for ASCR.
 
 Responsibilities:
-  1. Load secure-coding documents from ./data (PDF, Markdown, TXT).
-  2. Split them into overlapping chunks (recursive character splitter).
-  3. Embed chunks with a Sentence-Transformer model.
-  4. Index them in FAISS (falls back to a pure-NumPy cosine search when
-     faiss is unavailable, which happens on some slim cloud runtimes).
-  5. Expose .search(query, k) for the retrieval stage of the workflow.
+1. Load local security guidance.
+2. Split knowledge into chunks.
+3. Generate Sentence Transformer embeddings.
+4. Store embeddings in FAISS.
+5. Perform semantic retrieval.
 """
 
-from __future__ import annotations
-
-import os
-import pickle
+from pathlib import Path
 import re
-from dataclasses import dataclass, field
-from typing import List, Sequence
 
+import faiss
 import numpy as np
-
-# ----------------------------------------------------------------------------
-# Optional heavy dependencies are imported lazily / defensively so that the app
-# still boots (with a clear message) if a wheel fails to build on the host.
-# ----------------------------------------------------------------------------
-try:
-    import faiss  # type: ignore
-
-    _HAS_FAISS = True
-except Exception:  # pragma: no cover
-    faiss = None  # type: ignore
-    _HAS_FAISS = False
-
-DEFAULT_EMBED_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
-DATA_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data")
-INDEX_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), ".cache")
+from sentence_transformers import SentenceTransformer
 
 
-# ----------------------------------------------------------------------------
-# Document loading
-# ----------------------------------------------------------------------------
-def _read_pdf(path: str) -> str:
-    from pypdf import PdfReader
-
-    reader = PdfReader(path)
-    pages = []
-    for page in reader.pages:
-        try:
-            pages.append(page.extract_text() or "")
-        except Exception:
-            pages.append("")
-    return "\n".join(pages)
+ROOT_DIR = Path(__file__).resolve().parents[1]
+DATA_DIR = ROOT_DIR / "data"
 
 
-def _read_text(path: str) -> str:
-    with open(path, "r", encoding="utf-8", errors="ignore") as fh:
-        return fh.read()
+class RAGPipeline:
+    """
+    Local Retrieval-Augmented Generation pipeline.
 
+    Uses:
+        Sentence Transformers -> embeddings
+        FAISS -> vector similarity search
+    """
 
-def load_documents(data_dir: str = DATA_DIR) -> List[dict]:
-    """Return [{'source': filename, 'text': '...'}] for every file in data_dir."""
-    docs: List[dict] = []
-    if not os.path.isdir(data_dir):
-        return docs
+    def __init__(
+        self,
+        model_name: str = "all-MiniLM-L6-v2",
+        chunk_size: int = 1000,
+        chunk_overlap: int = 200,
+    ):
+        self.model_name = model_name
+        self.chunk_size = chunk_size
+        self.chunk_overlap = chunk_overlap
 
-    for name in sorted(os.listdir(data_dir)):
-        path = os.path.join(data_dir, name)
-        if not os.path.isfile(path):
-            continue
-        lower = name.lower()
-        try:
-            if lower.endswith(".pdf"):
-                text = _read_pdf(path)
-            elif lower.endswith((".md", ".txt", ".rst")):
-                text = _read_text(path)
-            else:
-                continue
-        except Exception as exc:  # corrupt file should not kill the app
-            print(f"[rag] skipped {name}: {exc}")
-            continue
+        self.embedding_model = SentenceTransformer(model_name)
 
-        text = _normalise(text)
-        if len(text) > 50:
-            docs.append({"source": name, "text": text})
-    return docs
+        self.documents = self._load_documents()
 
-
-def _normalise(text: str) -> str:
-    text = text.replace("\x00", " ")
-    text = re.sub(r"[ \t]+", " ", text)
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip()
-
-
-# ----------------------------------------------------------------------------
-# Chunking  (a dependency-free RecursiveCharacterTextSplitter equivalent)
-# ----------------------------------------------------------------------------
-def recursive_split(
-    text: str,
-    chunk_size: int = 1000,
-    chunk_overlap: int = 200,
-    separators: Sequence[str] = ("\n\n", "\n", ". ", " ", ""),
-) -> List[str]:
-    """Split text, preferring the largest separator that keeps chunks under size."""
-    if len(text) <= chunk_size:
-        return [text] if text.strip() else []
-
-    sep = separators[-1]
-    for candidate in separators:
-        if candidate == "":
-            sep = ""
-            break
-        if candidate in text:
-            sep = candidate
-            break
-
-    pieces = list(text) if sep == "" else text.split(sep)
-    joiner = sep
-
-    chunks: List[str] = []
-    buffer = ""
-    for piece in pieces:
-        candidate = piece if not buffer else buffer + joiner + piece
-        if len(candidate) <= chunk_size:
-            buffer = candidate
-            continue
-
-        if buffer:
-            chunks.append(buffer)
-            # carry overlap forward
-            buffer = (buffer[-chunk_overlap:] + joiner + piece) if chunk_overlap else piece
-        else:
-            buffer = piece
-
-        if len(buffer) > chunk_size:
-            remaining = separators[1:] if len(separators) > 1 else ("",)
-            chunks.extend(recursive_split(buffer, chunk_size, chunk_overlap, remaining))
-            buffer = ""
-
-    if buffer.strip():
-        chunks.append(buffer)
-
-    return [c.strip() for c in chunks if c.strip()]
-
-
-def chunk_documents(docs: List[dict], chunk_size: int = 1000, chunk_overlap: int = 200) -> List[dict]:
-    out: List[dict] = []
-    for doc in docs:
-        for i, chunk in enumerate(recursive_split(doc["text"], chunk_size, chunk_overlap)):
-            out.append({"source": doc["source"], "chunk_id": i, "text": chunk})
-    return out
-
-
-# ----------------------------------------------------------------------------
-# Knowledge base
-# ----------------------------------------------------------------------------
-@dataclass
-class RetrievedChunk:
-    text: str
-    source: str
-    score: float
-
-
-@dataclass
-class KnowledgeBase:
-    embed_model_name: str = DEFAULT_EMBED_MODEL
-    chunk_size: int = 1000
-    chunk_overlap: int = 200
-    chunks: List[dict] = field(default_factory=list)
-    _model = None
-    _index = None
-    _matrix: np.ndarray | None = None
-
-    # -- build -------------------------------------------------------------
-    def build(self, data_dir: str = DATA_DIR) -> "KnowledgeBase":
-        docs = load_documents(data_dir)
-        if not docs:
-            raise FileNotFoundError(
-                f"No knowledge-base documents found in {data_dir}. "
-                "Add an OWASP PDF or keep the bundled owasp_guidelines.md."
+        if not self.documents:
+            raise ValueError(
+                "No security knowledge was found in the data directory."
             )
-        self.chunks = chunk_documents(docs, self.chunk_size, self.chunk_overlap)
-        embeddings = self._embed([c["text"] for c in self.chunks])
-        self._install(embeddings)
-        return self
 
-    def _embed(self, texts: List[str]) -> np.ndarray:
-        model = self._get_model()
-        vectors = model.encode(
-            texts,
-            batch_size=32,
-            convert_to_numpy=True,
+        self.index = self._build_index()
+
+    # ---------------------------------------------------------
+    # DOCUMENT LOADING
+    # ---------------------------------------------------------
+
+    def _load_documents(self):
+        """
+        Load the local security knowledge base.
+
+        Priority:
+        1. data/owasp_guidelines.txt
+        2. PDF files inside data/
+        """
+
+        text_file = DATA_DIR / "owasp_guidelines.txt"
+
+        if text_file.exists():
+            text = text_file.read_text(
+                encoding="utf-8",
+                errors="ignore",
+            )
+
+            return self._chunk_text(text)
+
+        pdf_files = list(DATA_DIR.glob("*.pdf"))
+
+        if pdf_files:
+            return self._load_pdf_documents(pdf_files)
+
+        return []
+
+    def _load_pdf_documents(self, pdf_files):
+        """
+        Extract text from PDF files using pypdf.
+        """
+
+        try:
+            from pypdf import PdfReader
+        except ImportError:
+            return []
+
+        full_text = []
+
+        for pdf_file in pdf_files:
+
+            try:
+                reader = PdfReader(str(pdf_file))
+
+                for page in reader.pages:
+                    page_text = page.extract_text()
+
+                    if page_text:
+                        full_text.append(page_text)
+
+            except Exception:
+                continue
+
+        combined_text = "\n".join(full_text)
+
+        return self._chunk_text(combined_text)
+
+    # ---------------------------------------------------------
+    # CHUNKING
+    # ---------------------------------------------------------
+
+    def _chunk_text(self, text: str):
+        """
+        Split text into overlapping chunks.
+
+        Example:
+            chunk_size = 1000
+            overlap = 200
+        """
+
+        text = re.sub(r"\s+", " ", text).strip()
+
+        if not text:
+            return []
+
+        chunks = []
+
+        start = 0
+        text_length = len(text)
+
+        while start < text_length:
+
+            end = min(
+                start + self.chunk_size,
+                text_length,
+            )
+
+            chunk = text[start:end].strip()
+
+            if chunk:
+                chunks.append(chunk)
+
+            if end >= text_length:
+                break
+
+            start = end - self.chunk_overlap
+
+        return chunks
+
+    # ---------------------------------------------------------
+    # VECTOR INDEX
+    # ---------------------------------------------------------
+
+    def _build_index(self):
+        """
+        Generate embeddings and build a FAISS index.
+        """
+
+        embeddings = self.embedding_model.encode(
+            self.documents,
             normalize_embeddings=True,
             show_progress_bar=False,
         )
-        return np.asarray(vectors, dtype="float32")
 
-    def _get_model(self):
-        if self._model is None:
-            from sentence_transformers import SentenceTransformer
+        embeddings = np.asarray(
+            embeddings,
+            dtype="float32",
+        )
 
-            self._model = SentenceTransformer(self.embed_model_name)
-        return self._model
+        dimension = embeddings.shape[1]
 
-    def _install(self, embeddings: np.ndarray) -> None:
-        self._matrix = embeddings
-        if _HAS_FAISS:
-            index = faiss.IndexFlatIP(embeddings.shape[1])  # vectors are L2-normalised
-            index.add(embeddings)
-            self._index = index
-        else:
-            self._index = None
+        index = faiss.IndexFlatIP(dimension)
 
-    # -- query -------------------------------------------------------------
-    def search(self, query: str, k: int = 4) -> List[RetrievedChunk]:
-        if not self.chunks:
+        index.add(embeddings)
+
+        return index
+
+    # ---------------------------------------------------------
+    # SEARCH
+    # ---------------------------------------------------------
+
+    def search(
+        self,
+        query: str,
+        top_k: int = 4,
+    ):
+        """
+        Retrieve the most relevant security guidance.
+
+        Returns:
+            list of dictionaries containing:
+                text
+                score
+        """
+
+        if not query.strip():
             return []
-        q = self._embed([query])
-        if self._index is not None:
-            scores, idxs = self._index.search(q, min(k, len(self.chunks)))
-            pairs = zip(idxs[0].tolist(), scores[0].tolist())
-        else:
-            sims = (self._matrix @ q[0]).astype(float)
-            top = np.argsort(-sims)[: min(k, len(self.chunks))]
-            pairs = ((int(i), float(sims[i])) for i in top)
 
-        results: List[RetrievedChunk] = []
-        for idx, score in pairs:
-            if idx < 0:
+        query_embedding = self.embedding_model.encode(
+            [query],
+            normalize_embeddings=True,
+            show_progress_bar=False,
+        )
+
+        query_embedding = np.asarray(
+            query_embedding,
+            dtype="float32",
+        )
+
+        top_k = min(
+            top_k,
+            len(self.documents),
+        )
+
+        scores, indices = self.index.search(
+            query_embedding,
+            top_k,
+        )
+
+        results = []
+
+        for score, index in zip(
+            scores[0],
+            indices[0],
+        ):
+
+            if index < 0:
                 continue
-            chunk = self.chunks[idx]
-            results.append(RetrievedChunk(text=chunk["text"], source=chunk["source"], score=float(score)))
-        return results
 
-    # -- persistence -------------------------------------------------------
-    def save(self, path: str = INDEX_DIR) -> None:
-        os.makedirs(path, exist_ok=True)
-        with open(os.path.join(path, "chunks.pkl"), "wb") as fh:
-            pickle.dump({"chunks": self.chunks, "model": self.embed_model_name}, fh)
-        np.save(os.path.join(path, "embeddings.npy"), self._matrix)
-
-    @classmethod
-    def load(cls, path: str = INDEX_DIR) -> "KnowledgeBase | None":
-        meta_path = os.path.join(path, "chunks.pkl")
-        vec_path = os.path.join(path, "embeddings.npy")
-        if not (os.path.exists(meta_path) and os.path.exists(vec_path)):
-            return None
-        with open(meta_path, "rb") as fh:
-            meta = pickle.load(fh)
-        kb = cls(embed_model_name=meta.get("model", DEFAULT_EMBED_MODEL))
-        kb.chunks = meta["chunks"]
-        kb._install(np.load(vec_path))
-        return kb
-
-    # -- info --------------------------------------------------------------
-    @property
-    def backend(self) -> str:
-        return "FAISS (IndexFlatIP)" if self._index is not None else "NumPy cosine (FAISS unavailable)"
-
-    @property
-    def sources(self) -> List[str]:
-        return sorted({c["source"] for c in self.chunks})
-
-
-# ----------------------------------------------------------------------------
-# Source-code chunking (functional, not character based) — Challenge 1 mitigation
-# ----------------------------------------------------------------------------
-_BLOCK_STARTERS = re.compile(
-    r"^(?:\s*)(?:def |class |async def |func |function |public |private |protected |static |"
-    r"const |var |let |int |void |char |struct |type |impl |module )",
-)
-
-
-def chunk_source_code(code: str, max_lines: int = 220) -> List[dict]:
-    """
-    Split code into logical units (functions / classes) so large files stay
-    inside the model context window. Returns [{'name', 'start_line', 'code'}].
-    """
-    lines = code.splitlines()
-    if len(lines) <= max_lines:
-        return [{"name": "whole_file", "start_line": 1, "code": code}]
-
-    boundaries: List[int] = []
-    for i, line in enumerate(lines):
-        if _BLOCK_STARTERS.match(line) and len(line) - len(line.lstrip()) <= 4:
-            boundaries.append(i)
-
-    if not boundaries:
-        return [
-            {"name": f"lines_{i + 1}", "start_line": i + 1, "code": "\n".join(lines[i : i + max_lines])}
-            for i in range(0, len(lines), max_lines)
-        ]
-
-    if boundaries[0] != 0:
-        boundaries.insert(0, 0)
-    boundaries.append(len(lines))
-
-    blocks: List[dict] = []
-    start = boundaries[0]
-    for nxt in boundaries[1:]:
-        if nxt - start == 0:
-            continue
-        if nxt - start > max_lines * 2:  # runaway block, hard-split it
-            for i in range(start, nxt, max_lines):
-                blocks.append(
-                    {
-                        "name": _block_name(lines[i]) or f"lines_{i + 1}",
-                        "start_line": i + 1,
-                        "code": "\n".join(lines[i : i + max_lines]),
-                    }
-                )
-            start = nxt
-            continue
-
-        chunk_lines = lines[start:nxt]
-        if len("\n".join(chunk_lines).strip()):
-            blocks.append(
+            results.append(
                 {
-                    "name": _block_name(lines[start]) or f"lines_{start + 1}",
-                    "start_line": start + 1,
-                    "code": "\n".join(chunk_lines),
+                    "text": self.documents[int(index)],
+                    "score": float(score),
                 }
             )
-        start = nxt
 
-    # merge tiny neighbouring blocks to reduce API round-trips
-    merged: List[dict] = []
-    for block in blocks:
-        if merged and len(merged[-1]["code"].splitlines()) + len(block["code"].splitlines()) < max_lines:
-            merged[-1]["code"] += "\n" + block["code"]
-            merged[-1]["name"] += f" + {block['name']}"
-        else:
-            merged.append(block)
-    return merged
-
-
-def _block_name(line: str) -> str:
-    match = re.search(r"(?:def|class|func|function)\s+([A-Za-z_][\w]*)", line)
-    return match.group(1) if match else ""
-
-
-LANGUAGE_BY_EXTENSION = {
-    ".py": "python",
-    ".js": "javascript",
-    ".jsx": "javascript",
-    ".ts": "typescript",
-    ".tsx": "typescript",
-    ".java": "java",
-    ".c": "c",
-    ".h": "c",
-    ".cpp": "cpp",
-    ".cs": "csharp",
-    ".go": "go",
-    ".rb": "ruby",
-    ".php": "php",
-    ".rs": "rust",
-    ".sql": "sql",
-    ".sh": "bash",
-    ".yml": "yaml",
-    ".yaml": "yaml",
-}
-
-
-def detect_language(filename: str, default: str = "python") -> str:
-    _, ext = os.path.splitext(filename.lower())
-    return LANGUAGE_BY_EXTENSION.get(ext, default)
+        return results
