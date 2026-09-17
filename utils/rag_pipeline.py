@@ -1,171 +1,135 @@
-"""
-RAG pipeline for ASCR.
-
-Responsibilities:
-1. Load local security guidance.
-2. Split knowledge into chunks.
-3. Generate Sentence Transformer embeddings.
-4. Store embeddings in FAISS.
-5. Perform semantic retrieval.
-"""
-
+import os
 from pathlib import Path
-import re
+from typing import List, Dict, Any
 
 import faiss
 import numpy as np
+from pypdf import PdfReader
 from sentence_transformers import SentenceTransformer
 
 
-ROOT_DIR = Path(__file__).resolve().parents[1]
-DATA_DIR = ROOT_DIR / "data"
-
-
 class RAGPipeline:
-    """
-    Local Retrieval-Augmented Generation pipeline.
-
-    Uses:
-        Sentence Transformers -> embeddings
-        FAISS -> vector similarity search
-    """
 
     def __init__(
         self,
-        model_name: str = "all-MiniLM-L6-v2",
+        data_directory: str = "data",
+        embedding_model: str = "all-MiniLM-L6-v2",
         chunk_size: int = 1000,
         chunk_overlap: int = 200,
     ):
-        self.model_name = model_name
+
+        self.data_directory = Path(
+            data_directory
+        )
+
+        self.embedding_model_name = (
+            embedding_model
+        )
+
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
 
-        self.embedding_model = SentenceTransformer(model_name)
+        self.documents: List[str] = []
 
-        self.documents = self._load_documents()
+        self.metadata: List[Dict[str, Any]] = []
 
-        if not self.documents:
-            raise ValueError(
-                "No security knowledge was found in the data directory."
-            )
+        self.index = None
 
-        self.index = self._build_index()
+        self.embedding_model = None
 
-    # ---------------------------------------------------------
-    # DOCUMENT LOADING
-    # ---------------------------------------------------------
+        self._build_index()
 
-    def _load_documents(self):
-        """
-        Load the local security knowledge base.
-
-        Priority:
-        1. data/owasp_guidelines.txt
-        2. PDF files inside data/
-        """
-
-        text_file = DATA_DIR / "owasp_guidelines.txt"
-
-        if text_file.exists():
-            text = text_file.read_text(
-                encoding="utf-8",
-                errors="ignore",
-            )
-
-            return self._chunk_text(text)
-
-        pdf_files = list(DATA_DIR.glob("*.pdf"))
-
-        if pdf_files:
-            return self._load_pdf_documents(pdf_files)
-
-        return []
-
-    def _load_pdf_documents(self, pdf_files):
-        """
-        Extract text from PDF files using pypdf.
-        """
-
-        try:
-            from pypdf import PdfReader
-        except ImportError:
-            return []
-
-        full_text = []
-
-        for pdf_file in pdf_files:
-
-            try:
-                reader = PdfReader(str(pdf_file))
-
-                for page in reader.pages:
-                    page_text = page.extract_text()
-
-                    if page_text:
-                        full_text.append(page_text)
-
-            except Exception:
-                continue
-
-        combined_text = "\n".join(full_text)
-
-        return self._chunk_text(combined_text)
-
-    # ---------------------------------------------------------
-    # CHUNKING
-    # ---------------------------------------------------------
-
-    def _chunk_text(self, text: str):
-        """
-        Split text into overlapping chunks.
-
-        Example:
-            chunk_size = 1000
-            overlap = 200
-        """
-
-        text = re.sub(r"\s+", " ", text).strip()
-
-        if not text:
-            return []
-
-        chunks = []
-
-        start = 0
-        text_length = len(text)
-
-        while start < text_length:
-
-            end = min(
-                start + self.chunk_size,
-                text_length,
-            )
-
-            chunk = text[start:end].strip()
-
-            if chunk:
-                chunks.append(chunk)
-
-            if end >= text_length:
-                break
-
-            start = end - self.chunk_overlap
-
-        return chunks
-
-    # ---------------------------------------------------------
-    # VECTOR INDEX
-    # ---------------------------------------------------------
+    # ========================================================
+    # BUILD INDEX
+    # ========================================================
 
     def _build_index(self):
-        """
-        Generate embeddings and build a FAISS index.
-        """
 
-        embeddings = self.embedding_model.encode(
-            self.documents,
-            normalize_embeddings=True,
-            show_progress_bar=False,
+        pdf_files = list(
+            self.data_directory.glob(
+                "*.pdf"
+            )
+        )
+
+        if not pdf_files:
+
+            self.documents = [
+                (
+                    "OWASP secure coding guidance: "
+                    "validate and sanitize untrusted input, "
+                    "use parameterized database queries, "
+                    "protect authentication credentials, "
+                    "avoid hardcoded secrets, apply least "
+                    "privilege, encode output appropriately, "
+                    "and handle errors securely."
+                ),
+                (
+                    "SQL injection prevention: use "
+                    "parameterized queries or prepared "
+                    "statements instead of constructing SQL "
+                    "commands by concatenating untrusted input."
+                ),
+                (
+                    "Hardcoded credential prevention: secrets "
+                    "should not be embedded directly in source "
+                    "code. Use environment variables or a "
+                    "dedicated secrets-management mechanism."
+                ),
+            ]
+
+            self.metadata = [
+                {
+                    "source": "Built-in security guidance",
+                    "page": 0,
+                },
+                {
+                    "source": "Built-in security guidance",
+                    "page": 0,
+                },
+                {
+                    "source": "Built-in security guidance",
+                    "page": 0,
+                },
+            ]
+
+        else:
+
+            pdf_path = pdf_files[0]
+
+            text_pages = self._extract_pdf(
+                pdf_path
+            )
+
+            self.documents = self._chunk_documents(
+                text_pages
+            )
+
+        if not self.documents:
+
+            self.documents = [
+                "No security guidance was available."
+            ]
+
+            self.metadata = [
+                {
+                    "source": "Fallback",
+                    "page": 0,
+                }
+            ]
+
+        self.embedding_model = (
+            SentenceTransformer(
+                self.embedding_model_name
+            )
+        )
+
+        embeddings = (
+            self.embedding_model.encode(
+                self.documents,
+                convert_to_numpy=True,
+                normalize_embeddings=True,
+                show_progress_bar=False,
+            )
         )
 
         embeddings = np.asarray(
@@ -175,37 +139,145 @@ class RAGPipeline:
 
         dimension = embeddings.shape[1]
 
-        index = faiss.IndexFlatIP(dimension)
+        self.index = faiss.IndexFlatIP(
+            dimension
+        )
 
-        index.add(embeddings)
+        self.index.add(
+            embeddings
+        )
 
-        return index
+    # ========================================================
+    # PDF EXTRACTION
+    # ========================================================
 
-    # ---------------------------------------------------------
+    def _extract_pdf(
+        self,
+        pdf_path: Path,
+    ) -> List[Dict[str, Any]]:
+
+        pages = []
+
+        reader = PdfReader(
+            str(pdf_path)
+        )
+
+        for page_number, page in enumerate(
+            reader.pages,
+            start=1,
+        ):
+
+            try:
+
+                text = page.extract_text() or ""
+
+            except Exception:
+
+                text = ""
+
+            text = text.strip()
+
+            if text:
+
+                pages.append(
+                    {
+                        "text": text,
+                        "page": page_number,
+                        "source": pdf_path.name,
+                    }
+                )
+
+        return pages
+
+    # ========================================================
+    # CHUNKING
+    # ========================================================
+
+    def _chunk_documents(
+        self,
+        pages: List[Dict[str, Any]],
+    ) -> List[str]:
+
+        chunks = []
+
+        self.metadata = []
+
+        for page in pages:
+
+            text = page["text"]
+
+            start = 0
+
+            text_length = len(
+                text
+            )
+
+            while start < text_length:
+
+                end = min(
+                    start + self.chunk_size,
+                    text_length,
+                )
+
+                chunk = text[
+                    start:end
+                ].strip()
+
+                if chunk:
+
+                    chunks.append(
+                        chunk
+                    )
+
+                    self.metadata.append(
+                        {
+                            "source": page[
+                                "source"
+                            ],
+                            "page": page[
+                                "page"
+                            ],
+                        }
+                    )
+
+                if end >= text_length:
+                    break
+
+                next_start = (
+                    end
+                    - self.chunk_overlap
+                )
+
+                if next_start <= start:
+                    next_start = end
+
+                start = next_start
+
+        return chunks
+
+    # ========================================================
     # SEARCH
-    # ---------------------------------------------------------
+    # ========================================================
 
     def search(
         self,
         query: str,
-        top_k: int = 4,
-    ):
-        """
-        Retrieve the most relevant security guidance.
+        top_k: int = 3,
+    ) -> List[Dict[str, Any]]:
 
-        Returns:
-            list of dictionaries containing:
-                text
-                score
-        """
-
-        if not query.strip():
+        if not query:
             return []
 
-        query_embedding = self.embedding_model.encode(
-            [query],
-            normalize_embeddings=True,
-            show_progress_bar=False,
+        if self.index is None:
+            return []
+
+        query_embedding = (
+            self.embedding_model.encode(
+                [query],
+                convert_to_numpy=True,
+                normalize_embeddings=True,
+                show_progress_bar=False,
+            )
         )
 
         query_embedding = np.asarray(
@@ -213,14 +285,16 @@ class RAGPipeline:
             dtype="float32",
         )
 
-        top_k = min(
+        k = min(
             top_k,
             len(self.documents),
         )
 
-        scores, indices = self.index.search(
-            query_embedding,
-            top_k,
+        scores, indices = (
+            self.index.search(
+                query_embedding,
+                k,
+            )
         )
 
         results = []
@@ -235,9 +309,46 @@ class RAGPipeline:
 
             results.append(
                 {
-                    "text": self.documents[int(index)],
-                    "score": float(score),
+                    "text": self.documents[
+                        index
+                    ],
+                    "score": float(
+                        score
+                    ),
+                    "metadata": self.metadata[
+                        index
+                    ],
                 }
             )
 
         return results
+
+    # ========================================================
+    # RETRIEVE
+    # ========================================================
+
+    def retrieve(
+        self,
+        query: str,
+        top_k: int = 3,
+    ) -> List[Dict[str, Any]]:
+
+        return self.search(
+            query=query,
+            top_k=top_k,
+        )
+
+    # ========================================================
+    # QUERY
+    # ========================================================
+
+    def query(
+        self,
+        query: str,
+        top_k: int = 3,
+    ) -> List[Dict[str, Any]]:
+
+        return self.search(
+            query=query,
+            top_k=top_k,
+        )
